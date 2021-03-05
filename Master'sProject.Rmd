@@ -1,0 +1,367 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+# Importing project dataset and renaming variables and dichotmous observations
+pacman::p_load(plyr,dplyr)
+
+data = Hmisc::spss.get("~/Documents/MastersProject/NeuralMechanisms_SharedData.sav",use.value.labels = F)
+project = data[c(1,2,520)] 
+colnames(project) = c('ID', 'Cohort','Sex')
+project$Sex = factor(project$Sex) %>%  revalue(c("1" = "Male" ,"2" = "Female"))
+project$Cohort = factor(project$Cohort)
+
+# Segregating Cohort, Sex, and all 44 pre-post item measurments inyo another dataset
+items = data.frame(data[c(167:210,451:494)])
+items  = items  %>% select(-starts_with("NScA"))
+items = items[1:44]
+```
+
+```{r include=FALSE}
+
+# Problems w/ polychoric matrix, dichotomization resolves issues 
+#Additionally, equality constraints must be applied to all estimated parameters, intercept, threshold, etc to meaningfully compare the latent traits.If, the threshold's are different (indicate the amount of latent trait needed to endorse an item) are different for the same item latent constructs might be different. Cannot apply equality constraints to thresholds for polytomous items if certain thresholds are non-existent at one time point. Dichotomization results in one threshold, this one threshold is likely to exist at both timepoints.
+#Dichotomization done by assigning first category (the only non-endorsement category) as a '0' and the upper categories which are different gradations of 'yes' as '1'
+items[1:44] = sapply(items[1:44], function(x) as.factor(x))
+items[1:44] = sapply(items[1:44], function(x) revalue(x,c( "2" = "1", "3"="1", "4" = "1")))
+
+```
+
+```{r}
+# Removal of individuals with no post fMRI data
+
+rownames(project) = rownames(items) = project$ID
+a = which(is.na(project), arr.ind = T)
+a = data.frame(a)
+a = unique(a$row)
+nomatch = rownames(project[a,])
+nomatch = c(nomatch,as.character(c(456,457,580,590)))
+items  = items [!(rownames(items) %in% nomatch),]
+project = project[!(rownames(project) %in% nomatch),]
+```
+
+
+```{r}
+#Importing Excel sheet that containg pre-post IQ measurements and ensuring the correct IDs recieve the correct data
+
+matchnames = rownames(project)
+rawscores = openxlsx::read.xlsx("~/Documents/MastersProject/wais-iv_rescored.xlsx")
+rownames(rawscores) = rawscores$Enrollment.ID
+rawscores = rawscores[(rownames(rawscores) %in% matchnames),]
+project= data.frame(project, rawscores[,c(7:11,17:21)])
+
+# Creating a temporary dataset containing pre and post IQ indices 
+# to organize IQ columns alohapetically to make future conversion to a long dataset easier
+temp = project[,4:13]
+names = colnames(temp)
+names = gtools::mixedorder(names)
+temp = temp[names]
+project = data.frame(project[1:3],temp)
+```
+
+```{r}
+#Reason for missingness due for those with missing IQ scores is undiagnosable so removing them from dataset
+
+a = which(is.na(project), arr.ind = T)
+a = data.frame(a)
+a = unique(a$row)
+nomatch = rownames(project[a,])
+project  = project[!(rownames(project) %in% nomatch),]
+items  = items[!(rownames(items) %in% nomatch),]
+
+```
+
+
+```{r}
+#Establishing equality constraints for intercepts, thresholds, and loadings. Also allowing items to covary with themselves at their two timepoints, along with the latent constructs, standardized by fixing latent construct variables to 1
+library(lavaan)
+
+
+mod= '
+SAPre =~ 1*ScA1.1 + b*ScA3.1 + c*ScA4.1 + d*ScA5.1 + e*ScA9.1 + f*ScA12.1 + g*ScA13.1
++ h*ScA15.1 + i*ScA16.1 + j*ScA23.1 + k*ScA26.1 + l*ScA29.1 + m*ScA30.1 + n*ScA31.1 + o*ScA32.1
++ p*ScA33.1 + q*ScA34.1 + r*ScA36.1 + s*ScA37.1 + t*ScA38.1 + u*ScA41.1 + v*ScA42.1
+
+
+SAPost =~1*ScA1.2 + b*ScA3.2 + c*ScA4.2  + d*ScA5.2 + e*ScA9.2 + f*ScA12.2 + g*ScA13.2
++ h*ScA15.2 + i*ScA16.2 + j*ScA23.2 + k*ScA26.2 + l*ScA29.2 + m*ScA30.2 + n*ScA31.2 + o*ScA32.2
+ + p*ScA33.2 + q*ScA34.2 + r*ScA36.2 + s*ScA37.2 + t*ScA38.2 + u*ScA41.2 + v*ScA42.2
+ 
+SAPre~~SAPre
+SAPost~~SAPost
+SAPre~~SAPost
+
+ScA1.1~i1*1
+ScA3.1~i2*1
+ScA4.1~i3*1
+ScA5.1~i4*1
+ScA9.1~i5*1
+ScA12.1~i6*1
+ScA13.1~i7*1
+ScA15.1~i8*1
+ScA16.1~i9*1
+ScA23.1~i10*1
+ScA26.1~i11*1
+ScA29.1~i12*1
+ScA30.1~i13*1
+ScA31.1~i14*1
+ScA32.1~i15*1
+ScA33.1~i16*1
+ScA34.1~i17*1
+ScA36.1~i18*1
+ScA37.1~i19*1
+ScA38.1~i20*1
+ScA41.1~i21*1
+ScA42.1~i22*1
+
+ScA1.2~i1*1
+ScA3.2~i2*1
+ScA4.2~i3*1
+ScA5.2~i4*1
+ScA9.2~i5*1
+ScA12.2~i6*1
+ScA13.2~i7*1
+ScA15.2~i8*1
+ScA16.2~i9*1
+ScA23.2~i10*1
+ScA26.2~i11*1
+ScA29.2~i12*1
+ScA30.2~i13*1
+ScA31.2~i14*1
+ScA32.2~i15*1
+ScA33.2~i16*1
+ScA34.2~i17*1
+ScA36.2~i18*1
+ScA37.2~i19*1
+ScA38.2~i20*1
+ScA41.2~i21*1
+ScA42.2~i22*1
+
+ScA1.1~~ScA1.2
+ScA3.1~~ScA3.2
+ScA4.1~~ScA4.2
+ScA5.1~~ScA5.2
+ScA9.1~~ScA9.2
+ScA12.1~~ScA12.2
+ScA13.1~~ScA13.2
+ScA15.1~~ScA15.2
+ScA16.1~~ScA16.2
+ScA23.1~~ScA23.2
+ScA26.1~~ScA26.2
+ScA29.1~~ScA29.2
+ScA30.1~~ScA30.2
+ScA31.1~~ScA31.2
+ScA32.1~~ScA32.2
+ScA33.1~~ScA33.2
+ScA34.1~~ScA34.2
+ScA36.1~~ScA36.2
+ScA37.1~~ScA37.2
+ScA38.1~~ScA38.2
+ScA41.1~~ScA41.2
+ScA42.1~~ScA42.2
+
+
+
+#Estimate the post mean but not the pre mean, post mean should be relative to the pre mean.
+
+SAPre~0*1
+SAPost~1
+
+ScA1.1|th1*t1                               
+ScA3.1|th2*t1                                
+ScA4.1|th3*t1                                    
+ScA5.1|th4*t1                                   
+ScA9.1|th5*t1                                 
+ScA12.1|th6*t1                                
+ScA13.1|th7*t1                                
+ScA15.1|th8*t1                                  
+ScA16.1|th9*t1                                
+ScA23.1|th10*t1                              
+ScA26.1|th11*t1                                 
+ScA29.1|th12*t1                              
+ScA30.1|th13*t1                             
+ScA31.1|th14*t1                            
+ScA32.1|th15*t1                                 
+ScA33.1|th16*t1                                  
+ScA34.1|th17*t1                               
+ScA36.1|th18*t1                               
+ScA37.1|th19*t1                               
+ScA38.1|th20*t1                                
+ScA41.1|th21*t1                                
+ScA42.1|th22*t1                                  
+                             
+
+ScA1.2|th1*t1                               
+ScA3.2|th2*t1                                
+ScA4.2|th3*t1                                    
+ScA5.2|th4*t1                                   
+ScA9.2|th5*t1                                 
+ScA12.2|th6*t1                                
+ScA13.2|th7*t1                                
+ScA15.2|th8*t1                                  
+ScA16.2|th9*t1                                
+ScA23.2|th10*t1                              
+ScA26.2|th11*t1                                 
+ScA29.2|th12*t1                              
+ScA30.2|th13*t1                             
+ScA31.2|th14*t1                            
+ScA32.2|th15*t1                                 
+ScA33.2|th16*t1                                  
+ScA34.2|th17*t1                               
+ScA36.2|th18*t1                               
+ScA37.2|th19*t1                               
+ScA38.2|th20*t1                                
+ScA41.2|th21*t1                                
+ScA42.2|th22*t1
+'
+testrun = lavaan(mod, items, missing = 'pairwise')
+summary(testrun, fit.measures = T)
+
+#Some items negatively covary but are not significant so are statistically independent
+```
+
+
+
+```{r}
+#Correlation of the two latent constructs (standardized) and extraction of factor scores
+lavInspect(testrun, "cov.lv") 
+SA = lavPredict(object = testrun, newdata = items, type = 'lv')
+SA = data.frame(SA)
+lavResiduals(testrun)
+#Smaller samples result in larger SRMR due to natural sampling variation
+
+```
+
+```{r}
+#Coversion to long data and standardizing iq measures
+project = data.frame(project,SA)
+project_long = project %>% reshape(idvar = "ID", timevar = "Condition", varying = list(4:5,6:7, 8:9, 10:11, 12:13, 14:15), v.names = c("FSIQ","PRI","PSI", "VCI","WMI","SA"), direction = 'long') 
+project_long$Condition = factor(project_long$Condition) %>% revalue(c('1' = 'Baseline', '2' = 'Post-Treatment'))
+
+project_longscaled = project_long
+project_longscaled[5:9] = sapply(project_longscaled[5:9], function(x) scale(x, center = T, scale = T))
+
+```
+
+```{r}
+
+library(lme4)
+library(lmerTest)
+
+#  Cohort + (1|ID)
+modelWMI = lmer(formula = WMI~ Sex*SA*Condition +  (1|Cohort/ID) ,
+                data = project_longscaled)
+
+modelFSIQ = lmer(formula = FSIQ~ Sex*SA*Condition + (1|Cohort/ID) ,
+                 data = project_longscaled)
+
+
+modelPRI = lmer(formula = PRI~ Sex*Condition*SA+  (1|Cohort/ID) , data = project_longscaled)
+
+
+modelPSI = lmer(formula = PSI~ Sex*Condition*SA+ (1|Cohort/ID) , data = project_longscaled)
+
+modelVCI = lmer(formula = VCI~ Sex*Condition*SA+(1|Cohort/ID) , data = project_longscaled)
+
+modelSA= lmer(formula = SA~ Sex*Condition + (1|Cohort/ID),
+               data = project_longscaled)
+```
+
+```{r}
+summary(modelWMI)
+
+```
+
+```{r}
+summary(modelFSIQ)
+
+```
+
+```{r}
+summary(modelPRI)
+
+```
+
+```{r}
+summary(modelSA)
+
+```
+
+```{r}
+summary(modelVCI)
+
+```
+
+```{r}
+summary(modelPSI)
+```
+
+```{r}
+#Negatively autocorrelated errors increase Type II
+
+res1 = resid(modelSA)
+ar1 = lm(res1[101:200]~res1[1:100])
+summary(ar1)
+res2 = resid(modelPRI)
+ar2 = lm(res2[101:200]~res2[1:100])
+summary(ar2)
+res3 = resid(modelFSIQ)
+ar3 = lm(res3[101:200]~res3[1:100])
+summary(ar3)
+res4 = resid(modelWMI)
+ar4 = lm(res4[101:200]~res4[1:100])
+summary(ar4)
+plot(res1[1:100], res1[101:200])
+plot(res2[1:100], res2[101:200])
+plot(res3[1:100], res3[101:200])
+plot(res4[1:100], res4[101:200])
+
+```
+
+```{r}
+car::leveneTest(resid(modelSA)~project_long$Sex*project_long$Condition)
+car::leveneTest(resid(modelPRI)~project_long$Sex*project_long$Condition)
+car::leveneTest(resid(modelWMI)~project_long$Sex*project_long$Condition)
+
+
+library(lattice)
+qqmath(modelSA)
+qqmath(modelWMI)
+qqmath(modelPRI)
+
+```
+
+
+```{r}
+performance::check_heteroscedasticity(modelSA)
+performance::check_heteroscedasticity(modelPRI)
+performance::check_heteroscedasticity(modelWMI)
+
+
+```
+
+```{r}
+performance::check_normality(modelSA)
+performance::check_normality(modelPRI)
+performance::check_normality(modelWMI)
+```
+
+
+```{r}
+hist(resid(modelSA))
+hist(resid(modelPRI))
+hist(resid(modelWMI))
+
+ranSA = ranef(modelSA)[['ID:Cohort']]
+ranPRI = ranef(modelPRI)[['ID:Cohort']]
+ranWMI = ranef(modelWMI)[['ID:Cohort']]
+
+hist(ranSA)
+hist(ranPRI)
+hist(ranWMI)
+
+```
+```
+
